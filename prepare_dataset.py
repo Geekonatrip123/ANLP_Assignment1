@@ -8,16 +8,9 @@ import os
 import random
 from tqdm import tqdm
 
-def prepare_dataset(fi_file, en_file, output_file, max_samples=100000, max_length=150):
+def prepare_dataset(fi_file, en_file, output_file, max_samples=100000, max_length=None):
     """
-    Combine Finnish and English files into tab-separated format
-    
-    Args:
-        fi_file: Path to Finnish sentences file
-        en_file: Path to English sentences file  
-        output_file: Output file path
-        max_samples: Maximum number of sentence pairs to keep
-        max_length: Maximum sentence length (in characters)
+    Combine Finnish and English files into tab-separated format with no filtering
     """
     
     print(f"Reading files:")
@@ -42,35 +35,13 @@ def prepare_dataset(fi_file, en_file, output_file, max_samples=100000, max_lengt
     
     print(f"Using {min_length} sentence pairs")
     
-    # Filter by length and quality
-    filtered_pairs = []
+    # No filtering - use all pairs
+    filtered_pairs = list(zip(fi_sentences, en_sentences))
     
-    print("Filtering sentences...")
-    for fi, en in tqdm(zip(fi_sentences, en_sentences)):
-        # Skip empty or very short sentences
-        if len(fi.strip()) < 5 or len(en.strip()) < 5:
-            continue
-            
-        # Skip very long sentences (memory issues)
-        if len(fi) > max_length or len(en) > max_length:
-            continue
-        
-        # Skip sentences with too many special characters
-        if fi.count('<') > 2 or en.count('<') > 2:
-            continue
-            
-        # Skip if too many numbers (likely metadata)
-        if sum(c.isdigit() for c in fi) > len(fi) * 0.3:
-            continue
-        if sum(c.isdigit() for c in en) > len(en) * 0.3:
-            continue
-            
-        filtered_pairs.append((fi, en))
+    print(f"Total pairs: {len(filtered_pairs)}")
     
-    print(f"After filtering: {len(filtered_pairs)} sentence pairs")
-    
-    # Randomly sample if we have too many
-    if len(filtered_pairs) > max_samples:
+    # Only limit by max_samples if specified
+    if max_samples and len(filtered_pairs) > max_samples:
         print(f"Randomly sampling {max_samples} pairs...")
         random.shuffle(filtered_pairs)
         filtered_pairs = filtered_pairs[:max_samples]
@@ -81,17 +52,7 @@ def prepare_dataset(fi_file, en_file, output_file, max_samples=100000, max_lengt
         for fi, en in tqdm(filtered_pairs):
             f.write(f"{fi}\t{en}\n")
     
-    print(f"✅ Dataset prepared: {len(filtered_pairs)} sentence pairs")
-    print(f"📁 Saved to: {output_file}")
-    
-    # Show some examples
-    print("\n📝 Sample sentence pairs:")
-    print("-" * 80)
-    for i, (fi, en) in enumerate(filtered_pairs[:5]):
-        print(f"{i+1}. Finnish: {fi}")
-        print(f"   English: {en}")
-        print("-" * 80)
-    
+    print(f"Dataset prepared: {len(filtered_pairs)} sentence pairs")
     return len(filtered_pairs)
 
 def analyze_dataset(dataset_file):

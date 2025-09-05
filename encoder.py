@@ -31,16 +31,21 @@ class RotaryPositionalEmbedding(nn.Module):
         # q, k have shape: (batch, num_heads, seq_len, d_k)
         d_k = q.size(-1)
         
-        # Get the appropriate slice of cos/sin for d_k dimensions
-        cos = self.cos_cached[:seq_len, :d_k//2].unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, d_k//2)
-        sin = self.sin_cached[:seq_len, :d_k//2].unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, d_k//2)
+        # Get the appropriate slice of cos/sin for d_k//2 dimensions
+        cos = self.cos_cached[:seq_len, :d_k//2]  # (seq_len, d_k//2)
+        sin = self.sin_cached[:seq_len, :d_k//2]  # (seq_len, d_k//2)
         
-        # Expand cos and sin to match q, k dimensions
-        cos = cos.repeat(1, q.size(1), 1, 2)  # Repeat to get full d_k dimension
-        sin = sin.repeat(1, q.size(1), 1, 2)  # Repeat to get full d_k dimension
+        # Create cos and sin for full d_k by repeating each element
+        cos_full = torch.cat([cos, cos], dim=-1)  # (seq_len, d_k)
+        sin_full = torch.cat([sin, sin], dim=-1)  # (seq_len, d_k)
         
-        q_embed = (q * cos) + (self.rotate_half(q) * sin)
-        k_embed = (k * cos) + (self.rotate_half(k) * sin)
+        # Reshape for broadcasting to match q, k dimensions
+        cos_full = cos_full.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, d_k)
+        sin_full = sin_full.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, d_k)
+        
+        # Apply rotation
+        q_embed = (q * cos_full) + (self.rotate_half(q) * sin_full)
+        k_embed = (k * cos_full) + (self.rotate_half(k) * sin_full)
         
         return q_embed, k_embed
 

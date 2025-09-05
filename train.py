@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import argparse
@@ -87,6 +88,36 @@ class CosineAnnealingWarmupScheduler:
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr
 
+class LabelSmoothingLoss(nn.Module):
+    """Label smoothing loss to prevent mode collapse"""
+    def __init__(self, vocab_size, smoothing=0.1, ignore_index=0):
+        super().__init__()
+        self.confidence = 1.0 - smoothing
+        self.smoothing = smoothing
+        self.vocab_size = vocab_size
+        self.ignore_index = ignore_index
+        
+    def forward(self, pred, target):
+        # Reshape inputs
+        pred = pred.view(-1, pred.size(-1))
+        target = target.view(-1)
+        
+        # Create smooth target distribution
+        true_dist = torch.zeros_like(pred)
+        true_dist.fill_(self.smoothing / (self.vocab_size - 1))
+        true_dist.scatter_(1, target.unsqueeze(1), self.confidence)
+        
+        # Mask padding tokens
+        mask = (target != self.ignore_index)
+        if mask.sum() == 0:
+            return torch.tensor(0.0, device=pred.device, requires_grad=True)
+            
+        # Apply mask and compute loss
+        pred_masked = pred[mask]
+        true_dist_masked = true_dist[mask]
+        
+        return torch.mean(torch.sum(-true_dist_masked * F.log_softmax(pred_masked, dim=1), dim=1))
+
 def collate_fn(batch):
     """Custom collate function for DataLoader"""
     src_batch = torch.stack([item['src'] for item in batch])
@@ -118,8 +149,6 @@ def train_epoch(model, dataloader, optimizer, criterion, device, scheduler=None,
         if scaler:
             with torch.cuda.amp.autocast():
                 output, _ = model(src, tgt)
-                output = output.reshape(-1, output.size(-1))
-                target = target.reshape(-1)
                 loss = criterion(output, target)
             
             # Mixed precision backward pass
@@ -131,8 +160,6 @@ def train_epoch(model, dataloader, optimizer, criterion, device, scheduler=None,
         else:
             # Standard forward pass
             output, _ = model(src, tgt)
-            output = output.reshape(-1, output.size(-1))
-            target = target.reshape(-1)
             loss = criterion(output, target)
             
             # Standard backward pass
@@ -173,9 +200,6 @@ def validate_epoch(model, dataloader, criterion, device):
             output, _ = model(src, tgt)
             
             # Calculate loss
-            output = output.reshape(-1, output.size(-1))
-            target = target.reshape(-1)
-            
             loss = criterion(output, target)
             total_loss += loss.item()
     
@@ -210,6 +234,7 @@ def main():
     parser.add_argument('--min_freq', type=int, default=2, help='Minimum word frequency for vocab')
     parser.add_argument('--num_workers', type=int, default=None, help='Number of data loading workers')
     parser.add_argument('--mixed_precision', action='store_true', help='Enable mixed precision training')
+    parser.add_argument('--label_smoothing', type=float, default=0.1, help='Label smoothing factor')
     
     # Data parameters
     parser.add_argument('--data_path', type=str, required=True, help='Path to training data')
@@ -313,8 +338,10 @@ def main():
         lr_scheduler = LearningRateScheduler(args.d_model, args.warmup_steps)
         scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_scheduler)
     
-    # Loss function (ignore padding token)
-    criterion = nn.CrossEntropyLoss(ignore_index=tgt_tokenizer.word2idx['<pad>'])
+    # Use label smoothing loss to prevent mode collapse
+    print(f"Using label smoothing with factor: {args.label_smoothing}")
+    criterion = LabelSmoothingLoss(tgt_tokenizer.vocab_size, smoothing=args.label_smoothing, 
+                                  ignore_index=tgt_tokenizer.word2idx['<pad>'])
     
     # Mixed precision scaler
     scaler = torch.cuda.amp.GradScaler() if args.mixed_precision else None
@@ -432,6 +459,7 @@ def main():
     Batch Size: {args.batch_size}
     Max Length: {args.max_length}
     Positional Encoding: {args.positional_encoding.upper()}
+    Label Smoothing: {args.label_smoothing}
     
     Best Val Loss: {best_val_loss:.4f}
     Total Epochs: {args.epochs}"""
