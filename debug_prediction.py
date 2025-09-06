@@ -8,8 +8,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Load tokenizers from relative model directory
 src_tokenizer = Tokenizer()
 tgt_tokenizer = Tokenizer()
-src_tokenizer.load('./models/relative_model/src_tokenizer.pkl')
-tgt_tokenizer.load('./models/relative_model/tgt_tokenizer.pkl')
+src_tokenizer.load('./models/rope_model_final/src_tokenizer.pkl')
+tgt_tokenizer.load('./models/rope_model_final/tgt_tokenizer.pkl')
 
 # Load relative position model
 model = Transformer(
@@ -26,7 +26,7 @@ model = Transformer(
 ).to(device)
 
 # Load weights from relative model
-checkpoint = torch.load('./models/relative_model/best_model.pt', map_location=device)
+checkpoint = torch.load('./models/rope_model_final/best_model.pt', map_location=device)
 state_dict = checkpoint['model_state_dict']
 if any(key.startswith('module.') for key in state_dict.keys()):
     state_dict = {key[7:]: value for key, value in state_dict.items()}
