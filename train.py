@@ -15,6 +15,49 @@ from utils import *
 from decoder import Transformer
 from encoder import Encoder
 
+class FrequencyBalancedLoss(nn.Module):
+    """Frequency-balanced loss that automatically detects overused tokens"""
+    def __init__(self, vocab_size, ignore_index=0):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.ignore_index = ignore_index
+        
+        # Track token frequencies during training
+        self.register_buffer('token_counts', torch.zeros(vocab_size))
+        self.register_buffer('total_tokens', torch.tensor(0.0))
+        
+    def forward(self, pred, target):
+        pred = pred.view(-1, pred.size(-1))
+        target = target.view(-1)
+        
+        # Update token frequency tracking
+        mask = (target != self.ignore_index)
+        if mask.sum() > 0:
+            # Count tokens in this batch
+            for token_id in target[mask]:
+                self.token_counts[token_id] += 1
+            self.total_tokens += mask.sum()
+            
+            # Calculate dynamic penalties based on frequency
+            token_freqs = self.token_counts / (self.total_tokens + 1e-8)
+            
+            # Penalize tokens that appear too frequently (above 1% of all tokens)
+            penalties = torch.where(token_freqs > 0.01, 
+                                   1 + 5 * token_freqs,  # Scale penalty with frequency
+                                   torch.ones_like(token_freqs))
+        
+        # Standard cross entropy with dynamic weighting
+        ce_loss = F.cross_entropy(pred, target, ignore_index=self.ignore_index, reduction='none')
+        
+        if mask.sum() == 0:
+            return torch.tensor(0.0, device=pred.device, requires_grad=True)
+            
+        # Apply dynamic penalties
+        token_penalties = penalties[target[mask]]
+        weighted_loss = ce_loss[mask] * token_penalties
+        
+        return weighted_loss.mean()
+
 def setup_cluster_training():
     """Setup optimizations for cluster training"""
     
