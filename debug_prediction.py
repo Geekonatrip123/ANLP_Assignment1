@@ -5,13 +5,13 @@ from decoder import Transformer, DecodingStrategy
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# Load tokenizers from relative model directory
+# Load tokenizers from the RoPE model directory
 src_tokenizer = Tokenizer()
 tgt_tokenizer = Tokenizer()
 src_tokenizer.load('./models/rope_model_final/src_tokenizer.pkl')
 tgt_tokenizer.load('./models/rope_model_final/tgt_tokenizer.pkl')
 
-# Load relative position model
+# Create RoPE model (not relative)
 model = Transformer(
     src_vocab_size=src_tokenizer.vocab_size,
     tgt_vocab_size=tgt_tokenizer.vocab_size,
@@ -22,10 +22,10 @@ model = Transformer(
     d_ff=2048,
     max_length=128,
     dropout=0.1,
-    positional_encoding='relative'  # Changed to relative
+    positional_encoding='rope'  # Make sure this matches
 ).to(device)
 
-# Load weights from relative model
+# Load weights
 checkpoint = torch.load('./models/rope_model_final/best_model.pt', map_location=device)
 state_dict = checkpoint['model_state_dict']
 if any(key.startswith('module.') for key in state_dict.keys()):
@@ -42,14 +42,11 @@ test_sentences = [
     "Yritykset sopeutumaan muutoksiin"
 ]
 
-print("=== TESTING RELATIVE POSITION MODEL ===")
+print("=== TESTING ROPE MODEL (EPOCH 9) ===")
 for i, sentence in enumerate(test_sentences):
     print(f"\n--- Test {i+1}: '{sentence}' ---")
     
-    # Encoding/generation loop
     src_indices = src_tokenizer.encode(sentence, add_special_tokens=False)
-    print(f"Source encoded: {src_indices}")
-    
     src = torch.tensor([src_indices], dtype=torch.long).to(device)
     encoder_output = model.encode(src)
     src_mask = (src != 0).unsqueeze(1).unsqueeze(2)
@@ -59,7 +56,7 @@ for i, sentence in enumerate(test_sentences):
     tgt = torch.tensor([[sos_idx]], dtype=torch.long).to(device)
     
     generated = []
-    for step in range(10):  # Just 10 steps per sentence
+    for step in range(15):  # More steps to see longer translations
         with torch.no_grad():
             output = model.decode_step(tgt, encoder_output, src_mask)
             logits = output[:, -1, :]
