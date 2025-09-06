@@ -8,8 +8,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Load tokenizers from the RoPE model directory
 src_tokenizer = Tokenizer()
 tgt_tokenizer = Tokenizer()
-src_tokenizer.load('./models/rope_model_final/src_tokenizer.pkl')
-tgt_tokenizer.load('./models/rope_model_final/tgt_tokenizer.pkl')
+src_tokenizer.load('models/rope_model_success/src_tokenizer.pkl')
+tgt_tokenizer.load('models/rope_model_success/tgt_tokenizer.pkl')
 
 # Create RoPE model (not relative)
 model = Transformer(
@@ -26,7 +26,7 @@ model = Transformer(
 ).to(device)
 
 # Load weights
-checkpoint = torch.load('./models/rope_model_success/best_model.pt', map_location=device)
+checkpoint = torch.load('models/rope_model_success/best_model.pt', map_location=device)
 state_dict = checkpoint['model_state_dict']
 if any(key.startswith('module.') for key in state_dict.keys()):
     state_dict = {key[7:]: value for key, value in state_dict.items()}
@@ -35,13 +35,12 @@ model.eval()
 
 # Test sentences
 test_sentences = [
-    "Suomi on kaunis maa",
-    "Hyvää huomenta", 
-    "Kiitos paljon",
-    "Mikä on nimesi",
-    "Näkemiin"
+    "Auttaa työntekijöitä ja yrityksiä sopeutumaan talouden muutoksiin",
+    "Suomi",
+    "Euroopan sosiaalirahasto", 
+    "Komissio kiinnittää huomiota",
+    "Yritykset sopeutumaan muutoksiin"
 ]
-
 
 print("=== TESTING ROPE MODEL (EPOCH 9) ===")
 for i, sentence in enumerate(test_sentences):
