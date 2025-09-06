@@ -38,11 +38,13 @@ decoder = DecodingStrategy(model, src_tokenizer, tgt_tokenizer, device, max_leng
 
 # Test sentences
 test_sentences = [
-    "Auttaa työntekijöitä ja yrityksiä sopeutumaan talouden muutoksiin",
-    "Suomi",
-    "Euroopan sosiaalirahasto", 
-    "Komissio kiinnittää huomiota",
-    "Yritykset sopeutumaan muutoksiin"
+
+    "kissa",      # cat
+    "koira",      # dog  
+    "auto",       # car
+    "talo",       # house
+    "vesi"        # water
+
 ]
 
 print("=== TESTING ROPE MODEL WITH BEAM SEARCH ===")
