@@ -30,34 +30,38 @@ class FrequencyBalancedLoss(nn.Module):
         pred = pred.view(-1, pred.size(-1))
         target = target.view(-1)
         
-        # Update token frequency tracking
-        mask = (target != self.ignore_index)
-        if mask.sum() > 0:
-            # Move mask to same device as buffers and count tokens
-            mask = mask.to(self.token_counts.device)  # Add this line
-            target_masked = target[mask].to(self.token_counts.device)  # Add this line
+        # Move mask to same device as pred/target
+        mask = (target != self.ignore_index).to(pred.device)
+        
+        if mask.sum() == 0:
+            return torch.tensor(0.0, device=pred.device, requires_grad=True)
+        
+        # Update token frequency tracking - move everything to buffer device first
+        with torch.no_grad():
+            # Ensure mask and target are on same device as buffers
+            mask_cpu = mask.cpu()
+            target_cpu = target.cpu()
+            target_masked_cpu = target_cpu[mask_cpu]
             
             # Count tokens in this batch
-            for token_id in target_masked:
-                self.token_counts[token_id] += 1
-            self.total_tokens += mask.sum()
+            for token_id in target_masked_cpu:
+                self.token_counts[token_id.item()] += 1
+            self.total_tokens += mask_cpu.sum()
             
             # Calculate dynamic penalties based on frequency
             token_freqs = self.token_counts / (self.total_tokens + 1e-8)
             
             # Penalize tokens that appear too frequently (above 1% of all tokens)
             penalties = torch.where(token_freqs > 0.01, 
-                                   1 + 5 * token_freqs,  # Scale penalty with frequency
+                                   1 + 5 * token_freqs,
                                    torch.ones_like(token_freqs))
         
-        # Standard cross entropy with dynamic weighting
+        # Standard cross entropy
         ce_loss = F.cross_entropy(pred, target, ignore_index=self.ignore_index, reduction='none')
         
-        if mask.sum() == 0:
-            return torch.tensor(0.0, device=pred.device, requires_grad=True)
-            
-        # Apply dynamic penalties (move penalties to target device)
-        token_penalties = penalties[target[mask]].to(target.device)  # Add .to(target.device)
+        # Apply dynamic penalties - move penalties to pred device and index correctly
+        target_masked = target[mask]
+        token_penalties = penalties[target_masked.cpu()].to(pred.device)
         weighted_loss = ce_loss[mask] * token_penalties
         
         return weighted_loss.mean()
