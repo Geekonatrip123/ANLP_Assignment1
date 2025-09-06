@@ -324,20 +324,28 @@ def main():
     print(f"Validation samples: {len(val_src)}")
     print(f"Test samples: {len(test_src)}")
     
-    # Build vocabularies
-    print("Building vocabularies...")
-    src_tokenizer = Tokenizer()
-    tgt_tokenizer = Tokenizer()
-    
-    src_tokenizer.build_vocab(train_src, args.min_freq)
-    tgt_tokenizer.build_vocab(train_tgt, args.min_freq)
+    # Build or load vocabularies based on resume flag
+    if args.resume:
+        # Load existing tokenizers when resuming
+        print("Loading saved tokenizers for resume...")
+        src_tokenizer = Tokenizer()
+        tgt_tokenizer = Tokenizer()
+        src_tokenizer.load(os.path.join(args.model_dir, 'src_tokenizer.pkl'))
+        tgt_tokenizer.load(os.path.join(args.model_dir, 'tgt_tokenizer.pkl'))
+    else:
+        # Build new vocabularies for fresh training
+        print("Building vocabularies...")
+        src_tokenizer = Tokenizer()
+        tgt_tokenizer = Tokenizer()
+        src_tokenizer.build_vocab(train_src, args.min_freq)
+        tgt_tokenizer.build_vocab(train_tgt, args.min_freq)
+        
+        # Save tokenizers
+        src_tokenizer.save(os.path.join(args.model_dir, 'src_tokenizer.pkl'))
+        tgt_tokenizer.save(os.path.join(args.model_dir, 'tgt_tokenizer.pkl'))
     
     print(f"Source vocabulary size: {src_tokenizer.vocab_size}")
     print(f"Target vocabulary size: {tgt_tokenizer.vocab_size}")
-    
-    # Save tokenizers
-    src_tokenizer.save(os.path.join(args.model_dir, 'src_tokenizer.pkl'))
-    tgt_tokenizer.save(os.path.join(args.model_dir, 'tgt_tokenizer.pkl'))
     
     # Create datasets
     train_dataset = Dataset(train_src, train_tgt, src_tokenizer, tgt_tokenizer, args.max_length)
