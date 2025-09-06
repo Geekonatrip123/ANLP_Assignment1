@@ -33,6 +33,9 @@ if any(key.startswith('module.') for key in state_dict.keys()):
 model.load_state_dict(state_dict)
 model.eval()
 
+# Create DecodingStrategy object for beam search
+decoder = DecodingStrategy(model, src_tokenizer, tgt_tokenizer, device, max_length=100)
+
 # Test sentences
 test_sentences = [
     "Auttaa työntekijöitä ja yrityksiä sopeutumaan talouden muutoksiin",
@@ -42,33 +45,20 @@ test_sentences = [
     "Yritykset sopeutumaan muutoksiin"
 ]
 
-print("=== TESTING ROPE MODEL (EPOCH 9) ===")
+print("=== TESTING ROPE MODEL WITH BEAM SEARCH ===")
 for i, sentence in enumerate(test_sentences):
     print(f"\n--- Test {i+1}: '{sentence}' ---")
     
-    src_indices = src_tokenizer.encode(sentence, add_special_tokens=False)
-    src = torch.tensor([src_indices], dtype=torch.long).to(device)
-    encoder_output = model.encode(src)
-    src_mask = (src != 0).unsqueeze(1).unsqueeze(2)
+    # Greedy decoding
+    greedy_translation = decoder.greedy_decode(sentence)
+    print(f"Greedy:     '{greedy_translation}'")
     
-    sos_idx = tgt_tokenizer.word2idx['<sos>']
-    eos_idx = tgt_tokenizer.word2idx['<eos>']
-    tgt = torch.tensor([[sos_idx]], dtype=torch.long).to(device)
+    # Beam search decoding
+    beam_translation = decoder.beam_search_decode(sentence, beam_size=5)
+    print(f"Beam (5):   '{beam_translation}'")
     
-    generated = []
-    for step in range(15):  # More steps to see longer translations
-        with torch.no_grad():
-            output = model.decode_step(tgt, encoder_output, src_mask)
-            logits = output[:, -1, :]
-            
-            next_token = logits.argmax(dim=-1, keepdim=True)
-            next_token_id = next_token.item()
-            
-            tgt = torch.cat([tgt, next_token], dim=1)
-            generated.append(next_token_id)
-            
-            if next_token_id == eos_idx:
-                break
+    # Top-k sampling
+    topk_translation = decoder.top_k_sampling_decode(sentence, k=50, temperature=1.0)
+    print(f"Top-k (50): '{topk_translation}'")
     
-    final_translation = tgt_tokenizer.decode(tgt[0].cpu().tolist())
-    print(f"Translation: '{final_translation}'")
+    print("-" * 60)
