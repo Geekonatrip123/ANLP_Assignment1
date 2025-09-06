@@ -26,7 +26,7 @@ model = Transformer(
 ).to(device)
 
 # Load weights
-checkpoint = torch.load('models/rope_model_success/best_model.pt', map_location=device)
+checkpoint = torch.load('models/rope_model_success/model_epoch_10.pt', map_location=device)
 state_dict = checkpoint['model_state_dict']
 if any(key.startswith('module.') for key in state_dict.keys()):
     state_dict = {key[7:]: value for key, value in state_dict.items()}
