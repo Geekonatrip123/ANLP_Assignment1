@@ -24,8 +24,7 @@ def batch_translate(model, sentences, src_tokenizer, tgt_tokenizer, device,
             batch_sentences = sentences[i:i + batch_size]
             batch_translations = []
             
-            # Process each sentence in the batch individually for now
-            # (Batched decoding is complex for beam search/sampling)
+            # Process each sentence in the batch individually
             for sentence in batch_sentences:
                 if decoding_strategy == 'greedy':
                     translation = decoder.greedy_decode(sentence)
@@ -114,56 +113,6 @@ def analyze_translations(predictions, references, src_sentences, num_examples=20
     
     return analysis
 
-def create_detailed_report(results, model_info, test_info, output_dir):
-    """Create comprehensive evaluation report"""
-    
-    report = {
-        'model_information': model_info,
-        'test_information': test_info,
-        'results_summary': {},
-        'detailed_analysis': {},
-        'recommendations': []
-    }
-    
-    # Results summary
-    for strategy in results:
-        report['results_summary'][strategy] = {
-            'bleu_score': results[strategy]['bleu_score'],
-            'evaluation_time': results[strategy]['evaluation_time'],
-            'avg_time_per_sentence': results[strategy]['evaluation_time'] / test_info['num_samples']
-        }
-    
-    # Find best performing strategy
-    best_strategy = max(results.keys(), key=lambda s: results[s]['bleu_score'])
-    fastest_strategy = min(results.keys(), key=lambda s: results[s]['evaluation_time'])
-    
-    # Detailed analysis
-    report['detailed_analysis'] = {
-        'best_bleu_strategy': best_strategy,
-        'fastest_strategy': fastest_strategy,
-        'bleu_improvement': results[best_strategy]['bleu_score'] - results[fastest_strategy]['bleu_score'],
-        'time_tradeoff': results[best_strategy]['evaluation_time'] - results[fastest_strategy]['evaluation_time']
-    }
-    
-    # Recommendations
-    if results[best_strategy]['bleu_score'] > 0.3:
-        report['recommendations'].append("Excellent translation quality achieved. Model is ready for production use.")
-    elif results[best_strategy]['bleu_score'] > 0.2:
-        report['recommendations'].append("Good translation quality. Consider fine-tuning for specific domains.")
-    else:
-        report['recommendations'].append("Translation quality needs improvement. Consider increasing model size or training time.")
-    
-    if results[fastest_strategy]['evaluation_time'] < results[best_strategy]['evaluation_time'] * 2:
-        report['recommendations'].append(f"Use {fastest_strategy} for real-time applications - minimal BLEU loss.")
-    else:
-        report['recommendations'].append(f"Use {best_strategy} for batch processing - significantly better quality.")
-    
-    # Save report
-    with open(os.path.join(output_dir, 'detailed_evaluation_report.json'), 'w', encoding='utf-8') as f:
-        json.dump(report, f, indent=2, ensure_ascii=False)
-    
-    return report
-
 def main():
     parser = argparse.ArgumentParser(description='Test Transformer for Machine Translation')
     
@@ -199,7 +148,7 @@ def main():
     # Output parameters
     parser.add_argument('--output_dir', type=str, default='./results', help='Directory to save results')
     parser.add_argument('--num_examples', type=int, default=20, help='Number of examples to show')
-    parser.add_argument('--max_samples', type=int, default=None, help='Maximum test samples to use')
+    parser.add_argument('--max_samples', type=int, default=None, help='Maximum test samples to use (None for full test set)')
     parser.add_argument('--detailed_analysis', action='store_true', help='Perform detailed analysis')
     
     args = parser.parse_args()
@@ -493,38 +442,6 @@ def main():
         json.dump(comparison, f, indent=2, ensure_ascii=False)
     
     print(f"\nComparison results saved to: {comparison_file}")
-    
-    # Create comprehensive report
-    if args.detailed_analysis:
-        print("Creating detailed evaluation report...")
-        report = create_detailed_report(results, model_info, test_info, args.output_dir)
-        print("Detailed evaluation report created.")
-    
-    # Final recommendations
-    print(f"\n{'='*60}")
-    print("RECOMMENDATIONS")
-    print(f"{'='*60}")
-    
-    best_bleu = max(results[s]['bleu_score'] for s in strategies)
-    
-    if best_bleu > 0.35:
-        print("✅ Excellent translation quality! Model is production-ready.")
-    elif best_bleu > 0.25:
-        print("✅ Good translation quality. Consider domain-specific fine-tuning.")
-    elif best_bleu > 0.15:
-        print("⚠️  Moderate quality. Consider longer training or larger model.")
-    else:
-        print("❌ Low quality. Review data quality and model architecture.")
-    
-    if len(strategies) > 1:
-        fastest = min(strategies, key=lambda s: results[s]['evaluation_time'])
-        best = max(strategies, key=lambda s: results[s]['bleu_score'])
-        
-        print(f"\nFor real-time applications: Use {fastest.upper()}")
-        print(f"For batch processing: Use {best.upper()}")
-        
-        if results[fastest]['bleu_score'] / results[best]['bleu_score'] > 0.95:
-            print(f"💡 {fastest.upper()} offers excellent quality/speed trade-off!")
     
     print(f"\nEvaluation completed! Results saved in: {args.output_dir}")
 
