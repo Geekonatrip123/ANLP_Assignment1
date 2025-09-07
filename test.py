@@ -180,9 +180,10 @@ def main():
     src_sentences, tgt_sentences = load_data(args.data_path, args.max_samples)
     
     # Use the test split (assuming the data file contains all data)
-    _, _, (test_src, test_tgt) = split_data(src_sentences, tgt_sentences)
-    test_data = list(zip(test_src, test_tgt))
-    
+    #_, _, (test_src, test_tgt) = split_data(src_sentences, tgt_sentences)
+    #test_data = list(zip(test_src, test_tgt))
+    (train_src, train_tgt), _, _ = split_data(src_sentences, tgt_sentences)
+    test_data = list(zip(train_src, train_tgt))
     if args.max_samples:
         test_data = test_data[:args.max_samples]
     
