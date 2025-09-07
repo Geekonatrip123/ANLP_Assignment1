@@ -39,11 +39,9 @@ decoder = DecodingStrategy(model, src_tokenizer, tgt_tokenizer, device, max_leng
 # Test sentences
 test_sentences = [
 
-    "kissa",      # cat
-    "koira",      # dog  
-    "auto",       # car
-    "talo",       # house
-    "vesi"        # water
+    "Suomi",      # cat
+    "Euroopan sosiaalirahasto Suomessa 2007-2013",      # dog  
+    "Ohjelmakaudella 2007-20013 Suomen ESR-ohjelma tukee elinkeinoelämän kilpailukykyä ja työllisyyttä."      # car
 
 ]
 
