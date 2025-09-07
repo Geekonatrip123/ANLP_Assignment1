@@ -12,6 +12,14 @@ class RotaryPositionalEmbedding(nn.Module):
         inv_freq = 1.0 / (10000 ** (torch.arange(0, d_model, 2).float() / d_model))
         self.register_buffer('inv_freq', inv_freq)
         
+        # Precompute position encodings (for compatibility with trained model)
+        position = torch.arange(max_length).unsqueeze(1).float()
+        freqs = torch.einsum('i,j->ij', position.squeeze(), inv_freq)
+        
+        # Store cos and sin
+        self.register_buffer('cos_cached', freqs.cos())
+        self.register_buffer('sin_cached', freqs.sin())
+    
     def rotate_half(self, x):
         """Rotates half the hidden dims of the input."""
         x1 = x[..., : x.shape[-1] // 2]
@@ -21,19 +29,22 @@ class RotaryPositionalEmbedding(nn.Module):
     def apply_rotary_pos_emb(self, q, k, seq_len):
         """Apply rotary position embedding to query and key tensors."""
         # q, k have shape: (batch, num_heads, seq_len, d_k)
-        device = q.device
         d_k = q.size(-1)
+        device = q.device
         
-        # Generate position indices for current sequence
-        position = torch.arange(seq_len, device=device, dtype=torch.float32).unsqueeze(1)
-        
-        # Generate frequencies dynamically for the exact d_k we need
-        inv_freq = self.inv_freq[:d_k//2].to(device)  # Take only what we need
-        freqs = torch.einsum('i,j->ij', position.squeeze(), inv_freq)
-        
-        # Create cos and sin
-        cos = freqs.cos()  # (seq_len, d_k//2)
-        sin = freqs.sin()  # (seq_len, d_k//2)
+        # Safely handle cached tensors with bounds checking
+        max_cached_len = self.cos_cached.size(0)
+        if seq_len > max_cached_len:
+            # Fallback to dynamic computation for longer sequences
+            position = torch.arange(seq_len, device=device, dtype=torch.float32).unsqueeze(1)
+            inv_freq = self.inv_freq[:d_k//2].to(device)
+            freqs = torch.einsum('i,j->ij', position.squeeze(), inv_freq)
+            cos = freqs.cos()
+            sin = freqs.sin()
+        else:
+            # Use cached values for normal sequences
+            cos = self.cos_cached[:seq_len, :d_k//2].to(device)
+            sin = self.sin_cached[:seq_len, :d_k//2].to(device)
         
         # Create cos and sin for full d_k by repeating each element
         cos_full = torch.cat([cos, cos], dim=-1)  # (seq_len, d_k)
