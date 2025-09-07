@@ -201,7 +201,7 @@ def train_epoch(model, dataloader, optimizer, criterion, device, scheduler=None,
         if scaler:
             with torch.cuda.amp.autocast():
                 output, _ = model(src, tgt)
-                loss = criterion(output, target)
+                loss = criterion(output.view(-1, output.size(-1)), target.view(-1))
             
             # Mixed precision backward pass
             scaler.scale(loss).backward()
@@ -212,7 +212,7 @@ def train_epoch(model, dataloader, optimizer, criterion, device, scheduler=None,
         else:
             # Standard forward pass
             output, _ = model(src, tgt)
-            loss = criterion(output, target)
+            loss = criterion(output.view(-1, output.size(-1)), target.view(-1))
             
             # Standard backward pass
             loss.backward()
@@ -252,7 +252,7 @@ def validate_epoch(model, dataloader, criterion, device):
             output, _ = model(src, tgt)
             
             # Calculate loss
-            loss = criterion(output, target)
+            loss = criterion(output.view(-1, output.size(-1)), target.view(-1))
             total_loss += loss.item()
     
     return total_loss / num_batches
