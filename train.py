@@ -400,7 +400,7 @@ def main():
     
     # Use frequency-balanced loss to prevent mode collapse
     print(f"Using frequency-balanced loss with smoothing factor: {args.label_smoothing}")
-    criterion = FrequencyBalancedLoss(tgt_tokenizer.vocab_size, ignore_index=tgt_tokenizer.word2idx['<pad>'])
+    criterion = nn.CrossEntropyLoss(ignore_index=tgt_tokenizer.word2idx['<pad>'], label_smoothing=0.05)
     
     # Mixed precision scaler
     scaler = torch.cuda.amp.GradScaler() if args.mixed_precision else None
