@@ -151,29 +151,32 @@ def split_data(src_sentences, tgt_sentences, train_ratio=0.8, val_ratio=0.1):
     
     return (list(train_src), list(train_tgt)), (list(val_src), list(val_tgt)), (list(test_src), list(test_tgt))
 def calculate_bleu(references, hypotheses):
-    """Simple BLEU score calculation"""
+    """Improved BLEU score calculation with proper smoothing"""
     from collections import Counter
     import math
     
     def get_ngrams(tokens, n):
-        ngrams = []
-        for i in range(len(tokens) - n + 1):
-            ngrams.append(tuple(tokens[i:i + n]))
-        return ngrams
+        if len(tokens) < n:
+            return []
+        return [tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)]
     
     def bleu_score(reference, hypothesis, max_n=4):
-        ref_tokens = reference.split()
-        hyp_tokens = hypothesis.split()
+        ref_tokens = reference.lower().split()
+        hyp_tokens = hypothesis.lower().split()
         
         if len(hyp_tokens) == 0:
             return 0.0
         
         # Brevity penalty
-        bp = 1.0
-        if len(hyp_tokens) < len(ref_tokens):
-            bp = math.exp(1 - len(ref_tokens) / len(hyp_tokens))
+        ref_len = len(ref_tokens)
+        hyp_len = len(hyp_tokens)
         
-        # Calculate precision for each n-gram
+        if hyp_len > ref_len:
+            bp = 1.0
+        else:
+            bp = math.exp(1 - ref_len / hyp_len) if hyp_len > 0 else 0.0
+        
+        # Calculate precision for each n-gram with smoothing
         precisions = []
         for n in range(1, max_n + 1):
             ref_ngrams = Counter(get_ngrams(ref_tokens, n))
@@ -183,10 +186,23 @@ def calculate_bleu(references, hypotheses):
                 precisions.append(0.0)
                 continue
             
-            matches = sum((ref_ngrams & hyp_ngrams).values())
-            total = sum(hyp_ngrams.values())
+            # Clipped counts
+            clipped_counts = 0
+            for ngram in hyp_ngrams:
+                clipped_counts += min(hyp_ngrams[ngram], ref_ngrams.get(ngram, 0))
             
-            precisions.append(matches / total if total > 0 else 0.0)
+            total_hyp_ngrams = sum(hyp_ngrams.values())
+            
+            if total_hyp_ngrams == 0:
+                precision = 0.0
+            else:
+                precision = clipped_counts / total_hyp_ngrams
+            
+            # Add smoothing for zero precision
+            if precision == 0.0:
+                precision = 1e-7
+            
+            precisions.append(precision)
         
         # Geometric mean
         if any(p == 0 for p in precisions):
@@ -195,13 +211,17 @@ def calculate_bleu(references, hypotheses):
         log_precisions = [math.log(p) for p in precisions]
         geo_mean = math.exp(sum(log_precisions) / len(log_precisions))
         
-        return bp * geo_mean
+        return bp * geo_mean * 100  # Return as percentage
     
     total_bleu = 0.0
-    for ref, hyp in zip(references, hypotheses):
-        total_bleu += bleu_score(ref, hyp)
+    valid_pairs = 0
     
-    return total_bleu / len(references) if len(references) > 0 else 0.0
+    for ref, hyp in zip(references, hypotheses):
+        if ref.strip() and hyp.strip():  # Skip empty strings
+            total_bleu += bleu_score(ref, hyp)
+            valid_pairs += 1
+    
+    return total_bleu / valid_pairs if valid_pairs > 0 else 0.0
 
 class LearningRateScheduler:
     def __init__(self, d_model, warmup_steps=4000):

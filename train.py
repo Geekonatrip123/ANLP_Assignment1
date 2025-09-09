@@ -15,58 +15,6 @@ from utils import *
 from decoder import Transformer
 from encoder import Encoder
 
-class FrequencyBalancedLoss(nn.Module):
-    """Frequency-balanced loss that automatically detects overused tokens"""
-    def __init__(self, vocab_size, ignore_index=0):
-        super().__init__()
-        self.vocab_size = vocab_size
-        self.ignore_index = ignore_index
-        
-        # Track token frequencies during training
-        self.register_buffer('token_counts', torch.zeros(vocab_size))
-        self.register_buffer('total_tokens', torch.tensor(0.0))
-    
-    def forward(self, pred, target):
-        pred = pred.view(-1, pred.size(-1))
-        target = target.view(-1)
-        
-        # Move mask to same device as pred/target
-        mask = (target != self.ignore_index).to(pred.device)
-        
-        if mask.sum() == 0:
-            return torch.tensor(0.0, device=pred.device, requires_grad=True)
-        
-        # Update token frequency tracking - move everything to buffer device first
-        with torch.no_grad():
-            # Ensure mask and target are on same device as buffers
-            mask_cpu = mask.cpu()
-            target_cpu = target.cpu()
-            target_masked_cpu = target_cpu[mask_cpu]
-            
-            # Count tokens in this batch
-            for token_id in target_masked_cpu:
-                self.token_counts[token_id.item()] += 1
-            self.total_tokens += mask_cpu.sum()
-            
-            # Calculate dynamic penalties based on frequency
-            token_freqs = self.token_counts / (self.total_tokens + 1e-8)
-            
-            # Penalize tokens that appear too frequently (above 1% of all tokens)
-            penalties = torch.where(token_freqs > 0.01, 
-                                   1 + 5 * token_freqs,
-                                   torch.ones_like(token_freqs))
-        
-        # Standard cross entropy
-        ce_loss = F.cross_entropy(pred, target, ignore_index=self.ignore_index, reduction='none')
-        
-        # Apply dynamic penalties - move penalties to pred device and index correctly
-        target_masked = target[mask]
-        token_penalties = penalties[target_masked.cpu()].to(pred.device)
-        weighted_loss = ce_loss[mask] * token_penalties
-        
-        return weighted_loss.mean()
-    
-
 def setup_cluster_training():
     """Setup optimizations for cluster training"""
     
@@ -139,36 +87,6 @@ class CosineAnnealingWarmupScheduler:
         
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr
-
-class LabelSmoothingLoss(nn.Module):
-    """Label smoothing loss to prevent mode collapse"""
-    def __init__(self, vocab_size, smoothing=0.1, ignore_index=0):
-        super().__init__()
-        self.confidence = 1.0 - smoothing
-        self.smoothing = smoothing
-        self.vocab_size = vocab_size
-        self.ignore_index = ignore_index
-        
-    def forward(self, pred, target):
-        # Reshape inputs
-        pred = pred.view(-1, pred.size(-1))
-        target = target.view(-1)
-        
-        # Create smooth target distribution
-        true_dist = torch.zeros_like(pred)
-        true_dist.fill_(self.smoothing / (self.vocab_size - 1))
-        true_dist.scatter_(1, target.unsqueeze(1), self.confidence)
-        
-        # Mask padding tokens
-        mask = (target != self.ignore_index)
-        if mask.sum() == 0:
-            return torch.tensor(0.0, device=pred.device, requires_grad=True)
-            
-        # Apply mask and compute loss
-        pred_masked = pred[mask]
-        true_dist_masked = true_dist[mask]
-        
-        return torch.mean(torch.sum(-true_dist_masked * F.log_softmax(pred_masked, dim=1), dim=1))
 
 def collate_fn(batch):
     """Custom collate function for DataLoader"""
@@ -398,9 +316,9 @@ def main():
         lr_scheduler = LearningRateScheduler(args.d_model, args.warmup_steps)
         scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_scheduler)
     
-    # Use frequency-balanced loss to prevent mode collapse
-    print(f"Using frequency-balanced loss with smoothing factor: {args.label_smoothing}")
-    criterion = nn.CrossEntropyLoss(ignore_index=tgt_tokenizer.word2idx['<pad>'], label_smoothing=0.05)
+    # Use standard CrossEntropyLoss with label smoothing
+    print(f"Using CrossEntropyLoss with label smoothing: {args.label_smoothing}")
+    criterion = nn.CrossEntropyLoss(ignore_index=tgt_tokenizer.word2idx['<pad>'], label_smoothing=args.label_smoothing)
     
     # Mixed precision scaler
     scaler = torch.cuda.amp.GradScaler() if args.mixed_precision else None
