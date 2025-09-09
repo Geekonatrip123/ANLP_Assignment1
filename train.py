@@ -116,26 +116,11 @@ def train_epoch(model, dataloader, optimizer, criterion, device, scheduler=None,
         optimizer.zero_grad()
         
         # Mixed precision forward pass
-        if scaler:
-            with torch.cuda.amp.autocast():
-                output, _ = model(src, tgt)
-                loss = criterion(output.view(-1, output.size(-1)), target.view(-1))
-            
-            # Mixed precision backward pass
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            # Standard forward pass
-            output, _ = model(src, tgt)
-            loss = criterion(output.view(-1, output.size(-1)), target.view(-1))
-            
-            # Standard backward pass
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+        output, _ = model(src, tgt)
+        loss = criterion(output.view(-1, output.size(-1)), target.view(-1))
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
         
         if scheduler:
             scheduler.step()
@@ -204,8 +189,7 @@ def main():
     parser.add_argument('--min_freq', type=int, default=2, help='Minimum word frequency for vocab')
     parser.add_argument('--num_workers', type=int, default=None, help='Number of data loading workers')
     parser.add_argument('--mixed_precision', action='store_true', help='Enable mixed precision training')
-    parser.add_argument('--label_smoothing', type=float, default=0.1, help='Label smoothing factor')
-    
+    parser.add_argument('--label_smoothing', type=float, default=0.0, help='Label smoothing factor')
     # Data parameters
     parser.add_argument('--data_path', type=str, required=True, help='Path to training data')
     parser.add_argument('--max_samples', type=int, default=None, help='Maximum number of samples to use')
@@ -317,8 +301,9 @@ def main():
         scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_scheduler)
     
     # Use standard CrossEntropyLoss with label smoothing
-    print(f"Using CrossEntropyLoss with label smoothing: {args.label_smoothing}")
-    criterion = nn.CrossEntropyLoss(ignore_index=tgt_tokenizer.word2idx['<pad>'], label_smoothing=args.label_smoothing)
+    # Use standard CrossEntropyLoss with label smoothing
+    print("Using CrossEntropyLoss without label smoothing for stability")
+    criterion = nn.CrossEntropyLoss(ignore_index=tgt_tokenizer.word2idx['<pad>'])
     
     # Mixed precision scaler
     scaler = torch.cuda.amp.GradScaler() if args.mixed_precision else None

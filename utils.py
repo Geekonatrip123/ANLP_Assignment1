@@ -3,78 +3,345 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 import numpy as np
-from collections import Counter
 import pickle
 import os
+from collections import Counter, defaultdict
+import re
 
-class Tokenizer:
-    def __init__(self):
-        self.word2idx = {}
+class BPETokenizer:
+    """
+    Simple Byte Pair Encoding (BPE) implementation for subword tokenization
+    """
+    def __init__(self, vocab_size=32000, min_freq=2):
+        self.vocab_size = vocab_size
+        self.min_freq = min_freq
+        self.vocab = {}
         self.idx2word = {}
-        self.vocab_size = 0
+        self.merges = []
+        self.special_tokens = ['<pad>', '<sos>', '<eos>', '<unk>']
         
-    def build_vocab(self, sentences, min_freq=1):
-        counter = Counter()
-        for sentence in sentences:
-            words = sentence.strip().split()
-            counter.update(words)
-        
-        # Special tokens
-        self.word2idx = {
-            '<pad>': 0,
-            '<sos>': 1,
-            '<eos>': 2,
-            '<unk>': 3
-        }
-        
-        idx = 4
-        for word, freq in counter.items():
-            if freq >= min_freq:
-                self.word2idx[word] = idx
-                idx += 1
-        
-        self.idx2word = {idx: word for word, idx in self.word2idx.items()}
-        self.vocab_size = len(self.word2idx)
-        
-    def encode(self, sentence, max_length=None, add_special_tokens=True):
-        words = sentence.strip().split()
-        if add_special_tokens:
-            words = ['<sos>'] + words + ['<eos>']
-        
-        indices = [self.word2idx.get(word, self.word2idx['<unk>']) for word in words]
-        
-        if max_length:
-            if len(indices) > max_length:
-                indices = indices[:max_length]
-            else:
-                indices += [self.word2idx['<pad>']] * (max_length - len(indices))
-        
-        return indices
+    def get_word_tokens(self, word):
+        """Split word into characters with end-of-word marker"""
+        return list(word[:-1]) + [word[-1] + '</w>']
     
-    def decode(self, indices):
-        words = []
-        for idx in indices:
-            word = self.idx2word.get(idx, '<unk>')
-            if word == '<eos>':
+    def get_pairs(self, word_tokens):
+        """Get all adjacent pairs in word tokens"""
+        pairs = set()
+        prev_char = word_tokens[0]
+        for char in word_tokens[1:]:
+            pairs.add((prev_char, char))
+            prev_char = char
+        return pairs
+    
+    def merge_tokens(self, word_tokens, pair):
+        """Apply a merge operation to word tokens"""
+        new_tokens = []
+        i = 0
+        while i < len(word_tokens):
+            if i < len(word_tokens) - 1 and (word_tokens[i], word_tokens[i + 1]) == pair:
+                new_tokens.append(word_tokens[i] + word_tokens[i + 1])
+                i += 2
+            else:
+                new_tokens.append(word_tokens[i])
+                i += 1
+        return new_tokens
+    
+    def build_vocab(self, sentences, min_freq=2):
+        """Train BPE on sentences"""
+        print("Training BPE tokenizer...")
+        
+        # Initialize word frequencies
+        word_freqs = defaultdict(int)
+        for sentence in sentences:
+            if isinstance(sentence, str) and sentence.strip():
+                # Basic preprocessing
+                sentence = sentence.strip().lower()
+                words = sentence.split()
+                for word in words:
+                    word_freqs[word] += 1
+        
+        # Filter by minimum frequency
+        word_freqs = {word: freq for word, freq in word_freqs.items() if freq >= min_freq}
+        
+        # Split words into characters
+        vocab = defaultdict(int)
+        for word, freq in word_freqs.items():
+            word_tokens = self.get_word_tokens(word)
+            for token in word_tokens:
+                vocab[token] += freq
+        
+        # Get all pairs
+        pairs = defaultdict(int)
+        for word, freq in word_freqs.items():
+            word_tokens = self.get_word_tokens(word)
+            word_pairs = self.get_pairs(word_tokens)
+            for pair in word_pairs:
+                pairs[pair] += freq
+        
+        # Merge most frequent pairs
+        num_merges = self.vocab_size - len(self.special_tokens) - len(vocab)
+        
+        for i in range(num_merges):
+            if not pairs:
                 break
-            if word not in ['<pad>', '<sos>']:
-                words.append(word)
+                
+            # Find most frequent pair
+            best_pair = max(pairs, key=pairs.get)
+            if pairs[best_pair] < self.min_freq:
+                break
+                
+            # Merge the pair
+            self.merges.append(best_pair)
+            
+            # Update word frequencies with merged token
+            new_word_freqs = {}
+            for word, freq in word_freqs.items():
+                word_tokens = self.get_word_tokens(word)
+                # Apply all previous merges
+                for merge in self.merges:
+                    word_tokens = self.merge_tokens(word_tokens, merge)
+                new_word_freqs[''.join(word_tokens)] = freq
+            
+            word_freqs = new_word_freqs
+            
+            # Update pairs
+            pairs = defaultdict(int)
+            for word, freq in word_freqs.items():
+                word_tokens = list(word[:-1]) + [word[-1] + '</w>']
+                # Apply all merges
+                for merge in self.merges:
+                    word_tokens = self.merge_tokens(word_tokens, merge)
+                word_pairs = self.get_pairs(word_tokens)
+                for pair in word_pairs:
+                    pairs[pair] += freq
+        
+        # Build final vocabulary
+        final_vocab = set()
+        
+        # Add special tokens first
+        for token in self.special_tokens:
+            final_vocab.add(token)
+        
+        # Add all possible subword units
+        for word, freq in word_freqs.items():
+            word_tokens = list(word[:-1]) + [word[-1] + '</w>']
+            # Apply all merges
+            for merge in self.merges:
+                word_tokens = self.merge_tokens(word_tokens, merge)
+            final_vocab.update(word_tokens)
+        
+        # Create vocab dictionaries
+        self.vocab = {}
+        self.idx2word = {}
+        for i, token in enumerate(sorted(final_vocab)):
+            self.vocab[token] = i
+            self.idx2word[i] = token
+        
+        self.vocab_size = len(self.vocab)
+        
+        print(f"BPE training completed. Vocab size: {len(self.vocab)}")
+        print(f"Number of merges: {len(self.merges)}")
+    
+    def encode(self, text, add_special_tokens=True):
+        """Encode text into subword tokens"""
+        if not isinstance(text, str):
+            text = ""
+        
+        text = text.strip().lower()
+        words = text.split()
+        tokens = []
+        
+        for word in words:
+            word_tokens = self.get_word_tokens(word)
+            # Apply all merges
+            for merge in self.merges:
+                word_tokens = self.merge_tokens(word_tokens, merge)
+            
+            # Convert to indices
+            for token in word_tokens:
+                tokens.append(self.vocab.get(token, self.vocab['<unk>']))
+        
+        if add_special_tokens:
+            tokens = [self.vocab['<sos>']] + tokens + [self.vocab['<eos>']]
+        
+        return tokens
+    
+    def decode(self, tokens):
+        """Decode tokens back to text"""
+        if hasattr(tokens, 'tolist'):
+            tokens = tokens.tolist()
+        
+        words = []
+        current_word = ""
+        
+        for token in tokens:
+            if token in [self.vocab['<pad>'], self.vocab['<sos>']]:
+                continue
+            elif token == self.vocab['<eos>']:
+                break
+            else:
+                token_str = self.idx2word.get(token, '<unk>')
+                if token_str.endswith('</w>'):
+                    # End of word
+                    current_word += token_str[:-4]  # Remove </w>
+                    if current_word:
+                        words.append(current_word)
+                    current_word = ""
+                else:
+                    # Continue current word
+                    current_word += token_str
+        
+        # Handle remaining word
+        if current_word:
+            words.append(current_word)
+        
         return ' '.join(words)
     
-    def save(self, path):
-        with open(path, 'wb') as f:
-            pickle.dump({
-                'word2idx': self.word2idx,
-                'idx2word': self.idx2word,
-                'vocab_size': self.vocab_size
-            }, f)
+    def save(self, file_path):
+        """Save tokenizer to file"""
+        data = {
+            'vocab': self.vocab,
+            'idx2word': self.idx2word,
+            'merges': self.merges,
+            'vocab_size': self.vocab_size,
+            'special_tokens': self.special_tokens
+        }
+        with open(file_path, 'wb') as f:
+            pickle.dump(data, f)
     
-    def load(self, path):
-        with open(path, 'rb') as f:
+    def load(self, file_path):
+        """Load tokenizer from file"""
+        with open(file_path, 'rb') as f:
             data = pickle.load(f)
-            self.word2idx = data['word2idx']
-            self.idx2word = data['idx2word']
-            self.vocab_size = data['vocab_size']
+        self.vocab = data['vocab']
+        self.idx2word = data['idx2word']
+        self.merges = data['merges']
+        self.vocab_size = data['vocab_size']
+        self.special_tokens = data['special_tokens']
+    
+    @property
+    def word2idx(self):
+        return self.vocab
+
+# Improved Tokenizer class that uses BPE
+class Tokenizer:
+    def __init__(self, vocab_size=32000):
+        self.bpe = BPETokenizer(vocab_size=vocab_size)
+        self.vocab_size = vocab_size
+    
+    def build_vocab(self, sentences, min_freq=2):
+        """Build vocabulary using BPE"""
+        self.bpe.build_vocab(sentences, min_freq)
+        self.vocab_size = self.bpe.vocab_size
+    
+    def encode(self, text, add_special_tokens=False):
+        """Encode text to token indices"""
+        return self.bpe.encode(text, add_special_tokens)
+    
+    def decode(self, tokens):
+        """Decode token indices to text"""
+        return self.bpe.decode(tokens)
+    
+    @property
+    def word2idx(self):
+        return self.bpe.vocab
+    
+    def save(self, file_path):
+        self.bpe.save(file_path)
+    
+    def load(self, file_path):
+        self.bpe.load(file_path)
+
+def load_data(data_path, max_samples=None):
+    """Load parallel data from file"""
+    src_sentences = []
+    tgt_sentences = []
+    
+    with open(data_path, 'r', encoding='utf-8') as f:
+        for i, line in enumerate(f):
+            if max_samples and i >= max_samples:
+                break
+            
+            line = line.strip()
+            if '\t' in line:
+                src_sent, tgt_sent = line.split('\t', 1)
+                src_sentences.append(src_sent.strip())
+                tgt_sentences.append(tgt_sent.strip())
+    
+    print(f"Loaded {len(src_sentences)} sentence pairs")
+    return src_sentences, tgt_sentences
+
+def split_data(src_sentences, tgt_sentences, train_ratio=0.8, val_ratio=0.1):
+    """Split data into train, validation, and test sets"""
+    total_len = len(src_sentences)
+    train_len = int(total_len * train_ratio)
+    val_len = int(total_len * val_ratio)
+    
+    indices = list(range(total_len))
+    np.random.seed(42)  # For reproducibility
+    np.random.shuffle(indices)
+    
+    train_indices = indices[:train_len]
+    val_indices = indices[train_len:train_len + val_len]
+    test_indices = indices[train_len + val_len:]
+    
+    train_src = [src_sentences[i] for i in train_indices]
+    train_tgt = [tgt_sentences[i] for i in train_indices]
+    val_src = [src_sentences[i] for i in val_indices]
+    val_tgt = [tgt_sentences[i] for i in val_indices]
+    test_src = [src_sentences[i] for i in test_indices]
+    test_tgt = [tgt_sentences[i] for i in test_indices]
+    
+    return (train_src, train_tgt), (val_src, val_tgt), (test_src, test_tgt)
+
+def calculate_bleu(references, predictions):
+    """Calculate BLEU score (simplified implementation)"""
+    def get_ngrams(sentence, n):
+        words = sentence.split()
+        return [' '.join(words[i:i+n]) for i in range(len(words) - n + 1)]
+    
+    if not predictions or not references:
+        return 0.0
+    
+    total_score = 0
+    for pred, ref in zip(predictions, references):
+        if not pred.strip() or not ref.strip():
+            continue
+            
+        scores = []
+        
+        # Calculate precision for n-grams (n=1 to 4)
+        for n in range(1, 5):
+            pred_ngrams = Counter(get_ngrams(pred, n))
+            ref_ngrams = Counter(get_ngrams(ref, n))
+            
+            if len(pred_ngrams) == 0:
+                scores.append(0.0)
+                continue
+            
+            # Calculate precision
+            matches = sum(min(pred_ngrams[ngram], ref_ngrams[ngram]) 
+                         for ngram in pred_ngrams)
+            precision = matches / len(pred_ngrams) if len(pred_ngrams) > 0 else 0.0
+            scores.append(precision)
+        
+        # Calculate geometric mean
+        if all(score > 0 for score in scores):
+            bleu = math.exp(sum(math.log(score) for score in scores) / 4)
+        else:
+            bleu = 0.0
+        
+        # Brevity penalty
+        pred_len = len(pred.split())
+        ref_len = len(ref.split())
+        if pred_len < ref_len and pred_len > 0:
+            bp = math.exp(1 - ref_len / pred_len)
+        else:
+            bp = 1.0
+        
+        total_score += bleu * bp
+    
+    return total_score / len(predictions) if predictions else 0.0
 
 class Dataset:
     def __init__(self, src_sentences, tgt_sentences, src_tokenizer, tgt_tokenizer, max_length=128):
@@ -83,7 +350,7 @@ class Dataset:
         self.src_tokenizer = src_tokenizer
         self.tgt_tokenizer = tgt_tokenizer
         self.max_length = max_length
-        
+    
     def __len__(self):
         return len(self.src_sentences)
     
@@ -91,159 +358,57 @@ class Dataset:
         src_sentence = self.src_sentences[idx]
         tgt_sentence = self.tgt_sentences[idx]
         
-        src_indices = self.src_tokenizer.encode(src_sentence, self.max_length, add_special_tokens=False)
-        tgt_indices = self.tgt_tokenizer.encode(tgt_sentence, self.max_length, add_special_tokens=True)
+        # Encode sentences
+        src_tokens = self.src_tokenizer.encode(src_sentence, add_special_tokens=False)
+        tgt_tokens = self.tgt_tokenizer.encode(tgt_sentence, add_special_tokens=False)
         
-        # Create decoder input (without last token) and target (without first token)
-        decoder_input = tgt_indices[:-1]
-        target = tgt_indices[1:]
+        # Add SOS and EOS tokens
+        src_tokens = [self.src_tokenizer.word2idx['<sos>']] + src_tokens + [self.src_tokenizer.word2idx['<eos>']]
+        tgt_tokens = [self.tgt_tokenizer.word2idx['<sos>']] + tgt_tokens + [self.tgt_tokenizer.word2idx['<eos>']]
+        
+        # Pad sequences
+        if len(src_tokens) < self.max_length:
+            src_tokens.extend([self.src_tokenizer.word2idx['<pad>']] * (self.max_length - len(src_tokens)))
+        else:
+            src_tokens = src_tokens[:self.max_length-1] + [self.src_tokenizer.word2idx['<eos>']]
+        
+        if len(tgt_tokens) < self.max_length:
+            tgt_tokens.extend([self.tgt_tokenizer.word2idx['<pad>']] * (self.max_length - len(tgt_tokens)))
+        else:
+            tgt_tokens = tgt_tokens[:self.max_length-1] + [self.tgt_tokenizer.word2idx['<eos>']]
+        
+        # Create target input (without last token) and target output (without first token)
+        tgt_input = tgt_tokens[:-1]
+        target = tgt_tokens[1:]
         
         return {
-            'src': torch.tensor(src_indices, dtype=torch.long),
-            'tgt': torch.tensor(decoder_input, dtype=torch.long),
+            'src': torch.tensor(src_tokens, dtype=torch.long),
+            'tgt': torch.tensor(tgt_input, dtype=torch.long),
             'target': torch.tensor(target, dtype=torch.long)
         }
-
-def create_padding_mask(seq, pad_idx=0):
-    """Create padding mask for attention"""
-    return (seq != pad_idx).unsqueeze(1).unsqueeze(2)
-
-def create_look_ahead_mask(size):
-    """Create look-ahead mask for decoder self-attention"""
-    mask = torch.triu(torch.ones(size, size), diagonal=1)
-    return mask == 0
-
-def load_data(file_path, max_samples=None):
-    """Load parallel data from file"""
-    src_sentences = []
-    tgt_sentences = []
-    
-    with open(file_path, 'r', encoding='utf-8') as f:
-        for i, line in enumerate(f):
-            if max_samples and i >= max_samples:
-                break
-            parts = line.strip().split('\t')
-            if len(parts) >= 2:
-                src_sentences.append(parts[0])
-                tgt_sentences.append(parts[1])
-    
-    return src_sentences, tgt_sentences
-
-def split_data(src_sentences, tgt_sentences, train_ratio=0.8, val_ratio=0.1):
-    """Split data into train, validation, and test sets"""
-    total_size = len(src_sentences)
-    train_size = int(total_size * train_ratio)
-    val_size = int(total_size * val_ratio)
-    
-    # Create paired data first, then shuffle
-    paired_data = list(zip(src_sentences, tgt_sentences))
-    np.random.shuffle(paired_data)  # This keeps pairs together
-    
-    # Split the shuffled pairs
-    train_pairs = paired_data[:train_size]
-    val_pairs = paired_data[train_size:train_size + val_size]
-    test_pairs = paired_data[train_size + val_size:]
-    
-    # Unzip back into separate lists
-    train_src, train_tgt = zip(*train_pairs) if train_pairs else ([], [])
-    val_src, val_tgt = zip(*val_pairs) if val_pairs else ([], [])
-    test_src, test_tgt = zip(*test_pairs) if test_pairs else ([], [])
-    
-    return (list(train_src), list(train_tgt)), (list(val_src), list(val_tgt)), (list(test_src), list(test_tgt))
-def calculate_bleu(references, hypotheses):
-    """Improved BLEU score calculation with proper smoothing"""
-    from collections import Counter
-    import math
-    
-    def get_ngrams(tokens, n):
-        if len(tokens) < n:
-            return []
-        return [tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)]
-    
-    def bleu_score(reference, hypothesis, max_n=4):
-        ref_tokens = reference.lower().split()
-        hyp_tokens = hypothesis.lower().split()
-        
-        if len(hyp_tokens) == 0:
-            return 0.0
-        
-        # Brevity penalty
-        ref_len = len(ref_tokens)
-        hyp_len = len(hyp_tokens)
-        
-        if hyp_len > ref_len:
-            bp = 1.0
-        else:
-            bp = math.exp(1 - ref_len / hyp_len) if hyp_len > 0 else 0.0
-        
-        # Calculate precision for each n-gram with smoothing
-        precisions = []
-        for n in range(1, max_n + 1):
-            ref_ngrams = Counter(get_ngrams(ref_tokens, n))
-            hyp_ngrams = Counter(get_ngrams(hyp_tokens, n))
-            
-            if len(hyp_ngrams) == 0:
-                precisions.append(0.0)
-                continue
-            
-            # Clipped counts
-            clipped_counts = 0
-            for ngram in hyp_ngrams:
-                clipped_counts += min(hyp_ngrams[ngram], ref_ngrams.get(ngram, 0))
-            
-            total_hyp_ngrams = sum(hyp_ngrams.values())
-            
-            if total_hyp_ngrams == 0:
-                precision = 0.0
-            else:
-                precision = clipped_counts / total_hyp_ngrams
-            
-            # Add smoothing for zero precision
-            if precision == 0.0:
-                precision = 1e-7
-            
-            precisions.append(precision)
-        
-        # Geometric mean
-        if any(p == 0 for p in precisions):
-            return 0.0
-        
-        log_precisions = [math.log(p) for p in precisions]
-        geo_mean = math.exp(sum(log_precisions) / len(log_precisions))
-        
-        return bp * geo_mean * 100  # Return as percentage
-    
-    total_bleu = 0.0
-    valid_pairs = 0
-    
-    for ref, hyp in zip(references, hypotheses):
-        if ref.strip() and hyp.strip():  # Skip empty strings
-            total_bleu += bleu_score(ref, hyp)
-            valid_pairs += 1
-    
-    return total_bleu / valid_pairs if valid_pairs > 0 else 0.0
 
 class LearningRateScheduler:
     def __init__(self, d_model, warmup_steps=4000):
         self.d_model = d_model
         self.warmup_steps = warmup_steps
-        
+    
     def __call__(self, step):
         step = max(1, step)  # Avoid division by zero
-        return self.d_model ** -0.5 * min(step ** -0.5, step * self.warmup_steps ** -1.5)
+        return (self.d_model ** -0.5) * min(step ** -0.5, step * (self.warmup_steps ** -1.5))
 
-def save_checkpoint(model, optimizer, epoch, loss, path):
+def save_checkpoint(model, optimizer, epoch, loss, filepath):
     """Save model checkpoint"""
-    torch.save({
+    checkpoint = {
+        'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
-        'epoch': epoch,
         'loss': loss,
-    }, path)
+    }
+    torch.save(checkpoint, filepath)
 
-def load_checkpoint(model, optimizer, path):
+def load_checkpoint(model, optimizer, filepath):
     """Load model checkpoint"""
-    checkpoint = torch.load(path)
+    checkpoint = torch.load(filepath, map_location='cpu')
     model.load_state_dict(checkpoint['model_state_dict'])
     if optimizer:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
