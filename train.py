@@ -37,21 +37,17 @@ def setup_cluster_training():
             print(f"GPU {i}: {torch.cuda.get_device_name(i)}")
 
 def create_optimized_dataloader(dataset, batch_size, shuffle=True, num_workers=None):
-    """Create optimized DataLoader for cluster training"""
-    
-    if num_workers is None:
-        num_workers = min(16, os.cpu_count())  # Use more workers on cluster
+    """Create simple DataLoader for cluster compatibility"""
+    from torch.utils.data import DataLoader
     
     return DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
-        num_workers=num_workers,
-        pin_memory=True,  # Faster GPU transfers
-        persistent_workers=True,  # Keep workers alive between epochs
-        prefetch_factor=4,  # Prefetch more batches
+        num_workers=0,  # Disable multiprocessing
         collate_fn=collate_fn
     )
+
 
 def setup_model_for_cluster(model, device):
     """Setup model for multi-GPU training if available"""
