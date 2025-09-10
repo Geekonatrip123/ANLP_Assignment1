@@ -325,3 +325,5 @@ These contain the complete model state, optimizer state, and training metadata n
 1. Vaswani et al. "Attention is All You Need" (2017)
 2. Su et al. "RoFormer: Enhanced Transformer with Rotary Position Embedding" (2021)
 3. Shaw et al. "Self-Attention with Relative Position Representations" (2018)
+
+python train.py --data_path "finnish_english_100k.txt" --positional_encoding relative --batch_size 32 --epochs 10 --learning_rate 1e-4 --model_dir ./models_relative --log_dir ./logs_relative --num_workers 0
