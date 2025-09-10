@@ -5,252 +5,180 @@ import math
 import numpy as np
 import pickle
 import os
-from collections import Counter, defaultdict
-import re
+import tempfile
+from collections import Counter
 
-class BPETokenizer:
-    """
-    Simple Byte Pair Encoding (BPE) implementation for subword tokenization
-    """
-    def __init__(self, vocab_size=32000, min_freq=2):
+class SentencePieceTokenizer:
+    def __init__(self, vocab_size=32000):
         self.vocab_size = vocab_size
-        self.min_freq = min_freq
-        self.vocab = {}
-        self.idx2word = {}
-        self.merges = []
-        self.special_tokens = ['<pad>', '<sos>', '<eos>', '<unk>']
+        self.sp = None
+        self.model_path = None
         
-    def get_word_tokens(self, word):
-        """Split word into characters with end-of-word marker"""
-        return list(word[:-1]) + [word[-1] + '</w>']
-    
-    def get_pairs(self, word_tokens):
-        """Get all adjacent pairs in word tokens"""
-        pairs = set()
-        prev_char = word_tokens[0]
-        for char in word_tokens[1:]:
-            pairs.add((prev_char, char))
-            prev_char = char
-        return pairs
-    
-    def merge_tokens(self, word_tokens, pair):
-        """Apply a merge operation to word tokens"""
-        new_tokens = []
-        i = 0
-        while i < len(word_tokens):
-            if i < len(word_tokens) - 1 and (word_tokens[i], word_tokens[i + 1]) == pair:
-                new_tokens.append(word_tokens[i] + word_tokens[i + 1])
-                i += 2
-            else:
-                new_tokens.append(word_tokens[i])
-                i += 1
-        return new_tokens
-    
     def build_vocab(self, sentences, min_freq=2):
-        """Train BPE on sentences"""
-        print("Training BPE tokenizer...")
+        print(f"Training SentencePiece BPE tokenizer with vocab size {self.vocab_size}...")
         
-        # Initialize word frequencies
-        word_freqs = defaultdict(int)
-        for sentence in sentences:
-            if isinstance(sentence, str) and sentence.strip():
-                # Basic preprocessing
-                sentence = sentence.strip().lower()
-                words = sentence.split()
-                for word in words:
-                    word_freqs[word] += 1
+        try:
+            import sentencepiece as spm
+        except ImportError:
+            print("ERROR: SentencePiece not installed!")
+            print("Run: pip install sentencepiece")
+            raise ImportError("Install sentencepiece: pip install sentencepiece")
         
-        # Filter by minimum frequency
-        word_freqs = {word: freq for word, freq in word_freqs.items() if freq >= min_freq}
+        # Write sentences to temporary file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+            for sentence in sentences:
+                if isinstance(sentence, str) and sentence.strip():
+                    f.write(sentence.strip() + '\n')
+            temp_file = f.name
         
-        # Split words into characters
-        vocab = defaultdict(int)
-        for word, freq in word_freqs.items():
-            word_tokens = self.get_word_tokens(word)
-            for token in word_tokens:
-                vocab[token] += freq
+        # Create model prefix
+        model_prefix = tempfile.mktemp()
         
-        # Get all pairs
-        pairs = defaultdict(int)
-        for word, freq in word_freqs.items():
-            word_tokens = self.get_word_tokens(word)
-            word_pairs = self.get_pairs(word_tokens)
-            for pair in word_pairs:
-                pairs[pair] += freq
-        
-        # Merge most frequent pairs
-        num_merges = self.vocab_size - len(self.special_tokens) - len(vocab)
-        
-        for i in range(num_merges):
-            if not pairs:
-                break
-                
-            # Find most frequent pair
-            best_pair = max(pairs, key=pairs.get)
-            if pairs[best_pair] < self.min_freq:
-                break
-                
-            # Merge the pair
-            self.merges.append(best_pair)
+        try:
+            # Train SentencePiece model - THIS IS FAST (1-2 minutes)
+            spm.SentencePieceTrainer.train(
+                input=temp_file,
+                model_prefix=model_prefix,
+                vocab_size=self.vocab_size,
+                model_type='bpe',
+                pad_id=0, unk_id=3, bos_id=1, eos_id=2,
+                pad_piece='<pad>', unk_piece='<unk>', 
+                bos_piece='<sos>', eos_piece='<eos>',
+                character_coverage=0.9995,
+                num_threads=8,  # Use multiple threads for speed
+                split_by_unicode_script=True,
+                shuffle_input_sentence=True,
+                train_extremely_large_corpus=False
+            )
             
-            # Update word frequencies with merged token
-            new_word_freqs = {}
-            for word, freq in word_freqs.items():
-                word_tokens = self.get_word_tokens(word)
-                # Apply all previous merges
-                for merge in self.merges:
-                    word_tokens = self.merge_tokens(word_tokens, merge)
-                new_word_freqs[''.join(word_tokens)] = freq
+            # Load the trained model
+            self.sp = spm.SentencePieceProcessor(model_file=f'{model_prefix}.model')
+            self.model_path = f'{model_prefix}.model'
             
-            word_freqs = new_word_freqs
+            print(f"✅ SentencePiece BPE training completed!")
+            print(f"   Actual vocab size: {self.sp.vocab_size()}")
+            print(f"   Training time: ~1-2 minutes")
             
-            # Update pairs
-            pairs = defaultdict(int)
-            for word, freq in word_freqs.items():
-                word_tokens = list(word[:-1]) + [word[-1] + '</w>']
-                # Apply all merges
-                for merge in self.merges:
-                    word_tokens = self.merge_tokens(word_tokens, merge)
-                word_pairs = self.get_pairs(word_tokens)
-                for pair in word_pairs:
-                    pairs[pair] += freq
-        
-        # Build final vocabulary
-        final_vocab = set()
-        
-        # Add special tokens first
-        for token in self.special_tokens:
-            final_vocab.add(token)
-        
-        # Add all possible subword units
-        for word, freq in word_freqs.items():
-            word_tokens = list(word[:-1]) + [word[-1] + '</w>']
-            # Apply all merges
-            for merge in self.merges:
-                word_tokens = self.merge_tokens(word_tokens, merge)
-            final_vocab.update(word_tokens)
-        
-        # Create vocab dictionaries
-        self.vocab = {}
-        self.idx2word = {}
-        for i, token in enumerate(sorted(final_vocab)):
-            self.vocab[token] = i
-            self.idx2word[i] = token
-        
-        self.vocab_size = len(self.vocab)
-        
-        print(f"BPE training completed. Vocab size: {len(self.vocab)}")
-        print(f"Number of merges: {len(self.merges)}")
+        except Exception as e:
+            print(f"❌ SentencePiece training failed: {e}")
+            raise
+        finally:
+            # Clean up temp file
+            if os.path.exists(temp_file):
+                os.unlink(temp_file)
     
-    def encode(self, text, add_special_tokens=True):
-        """Encode text into subword tokens"""
+    def encode(self, text, add_special_tokens=False):
+        if not self.sp:
+            raise ValueError("Tokenizer not trained yet!")
+        
         if not isinstance(text, str):
             text = ""
         
-        text = text.strip().lower()
-        words = text.split()
-        tokens = []
-        
-        for word in words:
-            word_tokens = self.get_word_tokens(word)
-            # Apply all merges
-            for merge in self.merges:
-                word_tokens = self.merge_tokens(word_tokens, merge)
-            
-            # Convert to indices
-            for token in word_tokens:
-                tokens.append(self.vocab.get(token, self.vocab['<unk>']))
+        # SentencePiece encode
+        ids = self.sp.encode(text.strip())
         
         if add_special_tokens:
-            tokens = [self.vocab['<sos>']] + tokens + [self.vocab['<eos>']]
+            # Add BOS and EOS
+            ids = [self.sp.bos_id()] + ids + [self.sp.eos_id()]
         
-        return tokens
+        return ids
     
     def decode(self, tokens):
-        """Decode tokens back to text"""
+        if not self.sp:
+            raise ValueError("Tokenizer not trained yet!")
+        
         if hasattr(tokens, 'tolist'):
             tokens = tokens.tolist()
         
-        words = []
-        current_word = ""
-        
+        # Convert to integers
+        int_tokens = []
         for token in tokens:
-            if token in [self.vocab['<pad>'], self.vocab['<sos>']]:
-                continue
-            elif token == self.vocab['<eos>']:
-                break
-            else:
-                token_str = self.idx2word.get(token, '<unk>')
-                if token_str.endswith('</w>'):
-                    # End of word
-                    current_word += token_str[:-4]  # Remove </w>
-                    if current_word:
-                        words.append(current_word)
-                    current_word = ""
-                else:
-                    # Continue current word
-                    current_word += token_str
+            if hasattr(token, 'item'):
+                token = token.item()
+            int_tokens.append(int(token))
         
-        # Handle remaining word
-        if current_word:
-            words.append(current_word)
+        # Decode
+        text = self.sp.decode(int_tokens)
+        return text.strip()
+    
+    @property
+    def word2idx(self):
+        if not self.sp:
+            return {'<pad>': 0, '<sos>': 1, '<eos>': 2, '<unk>': 3}
         
-        return ' '.join(words)
+        # Create vocab dict
+        vocab = {}
+        for i in range(self.sp.vocab_size()):
+            piece = self.sp.id_to_piece(i)
+            vocab[piece] = i
+        return vocab
     
     def save(self, file_path):
-        """Save tokenizer to file"""
+        if not self.sp or not self.model_path:
+            raise ValueError("No trained model to save!")
+        
+        # Copy the SentencePiece model file
+        import shutil
+        base_path = file_path.replace('.pkl', '')
+        model_save_path = f"{base_path}.model"
+        shutil.copy2(self.model_path, model_save_path)
+        
+        # Save metadata
         data = {
-            'vocab': self.vocab,
-            'idx2word': self.idx2word,
-            'merges': self.merges,
             'vocab_size': self.vocab_size,
-            'special_tokens': self.special_tokens
+            'model_path': model_save_path
         }
         with open(file_path, 'wb') as f:
             pickle.dump(data, f)
+        
+        print(f"SentencePiece model saved to {model_save_path}")
     
     def load(self, file_path):
-        """Load tokenizer from file"""
-        with open(file_path, 'rb') as f:
-            data = pickle.load(f)
-        self.vocab = data['vocab']
-        self.idx2word = data['idx2word']
-        self.merges = data['merges']
-        self.vocab_size = data['vocab_size']
-        self.special_tokens = data['special_tokens']
-    
-    @property
-    def word2idx(self):
-        return self.vocab
+        try:
+            import sentencepiece as spm
+            
+            # Load metadata
+            with open(file_path, 'rb') as f:
+                data = pickle.load(f)
+            
+            self.vocab_size = data['vocab_size']
+            model_path = data['model_path']
+            
+            if os.path.exists(model_path):
+                self.sp = spm.SentencePieceProcessor(model_file=model_path)
+                self.model_path = model_path
+                print(f"SentencePiece model loaded from {model_path}")
+            else:
+                raise FileNotFoundError(f"Model file not found: {model_path}")
+                
+        except Exception as e:
+            print(f"Failed to load SentencePiece model: {e}")
+            raise
 
-# Improved Tokenizer class that uses BPE
 class Tokenizer:
-    def __init__(self, vocab_size=32000):
-        self.bpe = BPETokenizer(vocab_size=vocab_size)
+    def __init__(self, vocab_size=32000):  # Full 32k vocab like your friend
+        self.smp_tokenizer = SentencePieceTokenizer(vocab_size)
         self.vocab_size = vocab_size
     
     def build_vocab(self, sentences, min_freq=2):
-        """Build vocabulary using BPE"""
-        self.bpe.build_vocab(sentences, min_freq)
-        self.vocab_size = self.bpe.vocab_size
+        self.smp_tokenizer.build_vocab(sentences, min_freq)
+        self.vocab_size = self.smp_tokenizer.sp.vocab_size()
     
     def encode(self, text, add_special_tokens=False):
-        """Encode text to token indices"""
-        return self.bpe.encode(text, add_special_tokens)
+        return self.smp_tokenizer.encode(text, add_special_tokens)
     
     def decode(self, tokens):
-        """Decode token indices to text"""
-        return self.bpe.decode(tokens)
+        return self.smp_tokenizer.decode(tokens)
     
     @property
     def word2idx(self):
-        return self.bpe.vocab
+        return self.smp_tokenizer.word2idx
     
     def save(self, file_path):
-        self.bpe.save(file_path)
+        self.smp_tokenizer.save(file_path)
     
     def load(self, file_path):
-        self.bpe.load(file_path)
+        self.smp_tokenizer.load(file_path)
 
 def load_data(data_path, max_samples=None):
     """Load parallel data from file"""
@@ -278,7 +206,7 @@ def split_data(src_sentences, tgt_sentences, train_ratio=0.8, val_ratio=0.1):
     val_len = int(total_len * val_ratio)
     
     indices = list(range(total_len))
-    np.random.seed(42)  # For reproducibility
+    np.random.seed(42)
     np.random.shuffle(indices)
     
     train_indices = indices[:train_len]
@@ -295,7 +223,7 @@ def split_data(src_sentences, tgt_sentences, train_ratio=0.8, val_ratio=0.1):
     return (train_src, train_tgt), (val_src, val_tgt), (test_src, test_tgt)
 
 def calculate_bleu(references, predictions):
-    """Calculate BLEU score (simplified implementation)"""
+    """Calculate BLEU score"""
     def get_ngrams(sentence, n):
         words = sentence.split()
         return [' '.join(words[i:i+n]) for i in range(len(words) - n + 1)]
@@ -309,8 +237,6 @@ def calculate_bleu(references, predictions):
             continue
             
         scores = []
-        
-        # Calculate precision for n-grams (n=1 to 4)
         for n in range(1, 5):
             pred_ngrams = Counter(get_ngrams(pred, n))
             ref_ngrams = Counter(get_ngrams(ref, n))
@@ -319,19 +245,16 @@ def calculate_bleu(references, predictions):
                 scores.append(0.0)
                 continue
             
-            # Calculate precision
             matches = sum(min(pred_ngrams[ngram], ref_ngrams[ngram]) 
                          for ngram in pred_ngrams)
             precision = matches / len(pred_ngrams) if len(pred_ngrams) > 0 else 0.0
             scores.append(precision)
         
-        # Calculate geometric mean
         if all(score > 0 for score in scores):
             bleu = math.exp(sum(math.log(score) for score in scores) / 4)
         else:
             bleu = 0.0
         
-        # Brevity penalty
         pred_len = len(pred.split())
         ref_len = len(ref.split())
         if pred_len < ref_len and pred_len > 0:
@@ -358,26 +281,22 @@ class Dataset:
         src_sentence = self.src_sentences[idx]
         tgt_sentence = self.tgt_sentences[idx]
         
-        # Encode sentences
-        src_tokens = self.src_tokenizer.encode(src_sentence, add_special_tokens=False)
-        tgt_tokens = self.tgt_tokenizer.encode(tgt_sentence, add_special_tokens=False)
-        
-        # Add SOS and EOS tokens
-        src_tokens = [self.src_tokenizer.word2idx['<sos>']] + src_tokens + [self.src_tokenizer.word2idx['<eos>']]
-        tgt_tokens = [self.tgt_tokenizer.word2idx['<sos>']] + tgt_tokens + [self.tgt_tokenizer.word2idx['<eos>']]
+        # Encode sentences (SentencePiece handles special tokens)
+        src_tokens = self.src_tokenizer.encode(src_sentence, add_special_tokens=True)
+        tgt_tokens = self.tgt_tokenizer.encode(tgt_sentence, add_special_tokens=True)
         
         # Pad sequences
         if len(src_tokens) < self.max_length:
-            src_tokens.extend([self.src_tokenizer.word2idx['<pad>']] * (self.max_length - len(src_tokens)))
+            src_tokens.extend([0] * (self.max_length - len(src_tokens)))  # 0 is pad_id
         else:
-            src_tokens = src_tokens[:self.max_length-1] + [self.src_tokenizer.word2idx['<eos>']]
+            src_tokens = src_tokens[:self.max_length-1] + [2]  # 2 is eos_id
         
         if len(tgt_tokens) < self.max_length:
-            tgt_tokens.extend([self.tgt_tokenizer.word2idx['<pad>']] * (self.max_length - len(tgt_tokens)))
+            tgt_tokens.extend([0] * (self.max_length - len(tgt_tokens)))
         else:
-            tgt_tokens = tgt_tokens[:self.max_length-1] + [self.tgt_tokenizer.word2idx['<eos>']]
+            tgt_tokens = tgt_tokens[:self.max_length-1] + [2]
         
-        # Create target input (without last token) and target output (without first token)
+        # Create target input and target output
         tgt_input = tgt_tokens[:-1]
         target = tgt_tokens[1:]
         
@@ -393,7 +312,7 @@ class LearningRateScheduler:
         self.warmup_steps = warmup_steps
     
     def __call__(self, step):
-        step = max(1, step)  # Avoid division by zero
+        step = max(1, step)
         return (self.d_model ** -0.5) * min(step ** -0.5, step * (self.warmup_steps ** -1.5))
 
 def save_checkpoint(model, optimizer, epoch, loss, filepath):

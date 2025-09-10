@@ -11,6 +11,8 @@ seaborn>=0.11.0
 # Optional (for advanced logging)
 tensorboard>=2.10.0
 
+sentencepiece>=0.1.97
+
 # PyTorch with CUDA 12.1 (for RTX 4060) - Install separately
 # Run this command instead:
 # pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121

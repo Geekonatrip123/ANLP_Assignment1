@@ -299,7 +299,7 @@ def main():
     # Use standard CrossEntropyLoss with label smoothing
     # Use standard CrossEntropyLoss with label smoothing
     print("Using CrossEntropyLoss without label smoothing for stability")
-    criterion = nn.CrossEntropyLoss(ignore_index=tgt_tokenizer.word2idx['<pad>'])
+    criterion = nn.CrossEntropyLoss(ignore_index=0)  # 0 is always pad_id in SentencePiece
     
     # Mixed precision scaler
     scaler = torch.cuda.amp.GradScaler() if args.mixed_precision else None
