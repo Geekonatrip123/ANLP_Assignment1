@@ -58,7 +58,7 @@ def prepare_dataset(fi_file, en_file, output_file, max_samples=100000, max_lengt
 def analyze_dataset(dataset_file):
     """Analyze the prepared dataset"""
     
-    print(f"\n📊 Dataset Analysis: {dataset_file}")
+    print(f"\nðŸ“Š Dataset Analysis: {dataset_file}")
     print("=" * 50)
     
     fi_lengths = []
@@ -87,12 +87,12 @@ def main():
     
     # Check if input files exist
     if not os.path.exists(fi_file):
-        print(f"❌ Finnish file not found: {fi_file}")
+        print(f"âŒ Finnish file not found: {fi_file}")
         print("Make sure EUbookshop.fi is in the current directory")
         return
     
     if not os.path.exists(en_file):
-        print(f"❌ English file not found: {en_file}")
+        print(f"âŒ English file not found: {en_file}")
         print("Make sure EUbookshop.en is in the current directory")
         return
     
@@ -103,7 +103,7 @@ def main():
     # Analyze the prepared dataset
     analyze_dataset(output_file)
     
-    print(f"\n🎯 Next Steps:")
+    print(f"\nðŸŽ¯ Next Steps:")
     print(f"1. Your dataset is ready: {output_file}")
     print(f"2. Update run_experiment.sh to use this file:")
     print(f"   DATA_PATH=\"{output_file}\"")
