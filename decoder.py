@@ -203,7 +203,7 @@ class DecodingStrategy:
         return self.tgt_tokenizer.decode(output_indices)
     
     def beam_search_decode(self, src_sentence, beam_size=5):
-        """Improved beam search decoding strategy with proper batching and score normalization"""
+        """Beam search decoding strategy"""
         self.model.eval()
         
         # Tokenize source
@@ -214,120 +214,88 @@ class DecodingStrategy:
         encoder_output = self.model.encode(src)
         src_mask = (src != 0).unsqueeze(1).unsqueeze(2)
         
-        # Initialize beam search
+        # Initialize beams
         sos_token = self.tgt_tokenizer.word2idx['<sos>']
         eos_token = self.tgt_tokenizer.word2idx['<eos>']
-        pad_token = self.tgt_tokenizer.word2idx['<pad>']
         
-        vocab_size = len(self.tgt_tokenizer.word2idx)
-        
-        # Start with SOS token
-        sequences = torch.full((beam_size, 1), sos_token, dtype=torch.long, device=self.device)
-        scores = torch.zeros(beam_size, device=self.device)
-        scores[1:] = -float('inf')  # Only first beam is active initially
-        
-        completed_sequences = []
+        beams = [(torch.tensor([[sos_token]], dtype=torch.long).to(self.device), 0.0)]
+        completed_beams = []
         
         for step in range(self.max_length - 1):
-            if len(completed_sequences) >= beam_size:
+            new_beams = []
+            
+            for tgt_seq, score in beams:
+                if tgt_seq[0, -1].item() == eos_token:
+                    completed_beams.append((tgt_seq, score))
+                    continue
+                
+                # Get next token probabilities
+                output = self.model.decode_step(tgt_seq, encoder_output, src_mask)
+                log_probs = F.log_softmax(output[:, -1, :], dim=-1)
+                
+                # Get top-k tokens
+                top_log_probs, top_indices = log_probs.topk(beam_size)
+                
+                for i in range(beam_size):
+                    next_token = top_indices[0, i].unsqueeze(0).unsqueeze(0)
+                    new_score = score + top_log_probs[0, i].item()
+                    new_seq = torch.cat([tgt_seq, next_token], dim=1)
+                    new_beams.append((new_seq, new_score))
+            
+            # Keep top beam_size beams
+            new_beams.sort(key=lambda x: x[1], reverse=True)
+            beams = new_beams[:beam_size]
+            
+            # Check if all beams ended
+            if len(completed_beams) >= beam_size:
                 break
-                
-            # Get current sequence length
-            seq_len = sequences.size(1)
-            
-            # Expand encoder output for all beams
-            expanded_encoder_output = encoder_output.expand(beam_size, -1, -1)
-            expanded_src_mask = src_mask.expand(beam_size, -1, -1, -1)
-            
-            # Decode current sequences
-            outputs = self.model.decode_step(sequences, expanded_encoder_output, expanded_src_mask)
-            
-            # Get log probabilities for last token
-            log_probs = F.log_softmax(outputs[:, -1, :], dim=-1)  # [beam_size, vocab_size]
-            
-            # Add current scores to log probabilities
-            candidate_scores = scores.unsqueeze(1) + log_probs  # [beam_size, vocab_size]
-            
-            # Flatten to get all candidates
-            candidate_scores = candidate_scores.view(-1)  # [beam_size * vocab_size]
-            
-            # Get top beam_size candidates
-            top_scores, top_indices = torch.topk(candidate_scores, beam_size)
-            
-            # Convert back to beam and token indices
-            beam_indices = top_indices // vocab_size
-            token_indices = top_indices % vocab_size
-            
-            # Create new sequences
-            new_sequences = []
-            new_scores = []
-            
-            for i, (beam_idx, token_idx, score) in enumerate(zip(beam_indices, token_indices, top_scores)):
-                # Get previous sequence
-                prev_seq = sequences[beam_idx]
-                
-                # Create new sequence
-                new_seq = torch.cat([prev_seq, token_idx.unsqueeze(0)])
-                
-                # Check if sequence is completed
-                if token_idx == eos_token:
-                    # Apply length normalization to completed sequences
-                    normalized_score = score / len(new_seq)
-                    completed_sequences.append((new_seq, normalized_score.item()))
-                else:
-                    new_sequences.append(new_seq)
-                    new_scores.append(score)
-            
-            # If we don't have enough active sequences, break
-            if not new_sequences:
-                break
-                
-            # Pad sequences to same length
-            max_len = max(len(seq) for seq in new_sequences)
-            padded_sequences = []
-            
-            for seq in new_sequences:
-                padded_seq = torch.cat([seq, torch.full((max_len - len(seq),), pad_token, dtype=torch.long, device=self.device)])
-                padded_sequences.append(padded_seq)
-            
-            # Keep only top beam_size sequences
-            if len(padded_sequences) > beam_size:
-                # Sort by score and keep top beam_size
-                scored_seqs = list(zip(padded_sequences, new_scores))
-                scored_seqs.sort(key=lambda x: x[1], reverse=True)
-                padded_sequences = [seq for seq, _ in scored_seqs[:beam_size]]
-                new_scores = [score for _, score in scored_seqs[:beam_size]]
-            
-            sequences = torch.stack(padded_sequences[:beam_size])
-            scores = torch.tensor(new_scores[:beam_size], device=self.device)
-            
-            # Pad with dummy sequences if needed
-            while len(scores) < beam_size:
-                sequences = torch.cat([sequences, torch.full((1, sequences.size(1)), pad_token, dtype=torch.long, device=self.device)])
-                scores = torch.cat([scores, torch.tensor([-float('inf')], device=self.device)])
         
-        # Add remaining sequences to completed
-        for i, (seq, score) in enumerate(zip(sequences, scores)):
-            if score > -float('inf'):
-                # Remove padding
-                seq_no_pad = []
-                for token in seq:
-                    if token == pad_token:
-                        break
-                    seq_no_pad.append(token.item())
-                
-                if seq_no_pad:
-                    normalized_score = score / len(seq_no_pad)
-                    completed_sequences.append((torch.tensor(seq_no_pad, device=self.device), normalized_score.item()))
+        # Add remaining beams to completed
+        completed_beams.extend(beams)
         
         # Return best sequence
-        if completed_sequences:
-            best_seq, _ = max(completed_sequences, key=lambda x: x[1])
-            output_indices = best_seq.cpu().numpy().tolist()
-        else:
-            # Fallback to first sequence if nothing completed
-            output_indices = [sos_token, eos_token]
+        completed_beams.sort(key=lambda x: x[1], reverse=True)
+        best_seq = completed_beams[0][0]
         
+        # Decode to string
+        output_indices = best_seq[0].cpu().numpy().tolist()
         return self.tgt_tokenizer.decode(output_indices)
     
-    
+    def top_k_sampling_decode(self, src_sentence, k=50, temperature=1.0):
+        """Top-k sampling decoding strategy"""
+        self.model.eval()
+        
+        # Tokenize source
+        src_indices = self.src_tokenizer.encode(src_sentence, add_special_tokens=False)
+        src = torch.tensor([src_indices], dtype=torch.long).to(self.device)
+        
+        # Encode source
+        encoder_output = self.model.encode(src)
+        src_mask = (src != 0).unsqueeze(1).unsqueeze(2)
+        
+        # Initialize target with SOS token
+        tgt = torch.tensor([[self.tgt_tokenizer.word2idx['<sos>']]], dtype=torch.long).to(self.device)
+        
+        for _ in range(self.max_length - 1):
+            # Get next token probabilities
+            output = self.model.decode_step(tgt, encoder_output, src_mask)
+            logits = output[:, -1, :] / temperature
+            
+            # Apply top-k filtering
+            top_k_logits, top_k_indices = logits.topk(k)
+            
+            # Sample from top-k
+            probs = F.softmax(top_k_logits, dim=-1)
+            next_token_idx = torch.multinomial(probs, 1)
+            next_token = top_k_indices.gather(1, next_token_idx)
+            
+            # Append to target sequence
+            tgt = torch.cat([tgt, next_token], dim=1)
+            
+            # Stop if EOS token is generated
+            if next_token.item() == self.tgt_tokenizer.word2idx['<eos>']:
+                break
+        
+        # Decode to string
+        output_indices = tgt[0].cpu().numpy().tolist()
+        return self.tgt_tokenizer.decode(output_indices)
