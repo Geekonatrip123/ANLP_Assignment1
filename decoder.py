@@ -329,3 +329,5 @@ class DecodingStrategy:
             output_indices = [sos_token, eos_token]
         
         return self.tgt_tokenizer.decode(output_indices)
+    
+    
